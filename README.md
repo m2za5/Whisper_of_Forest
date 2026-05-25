@@ -1,5 +1,5 @@
 # Whisper of Forest
-![](https://cdn.jsdelivr.net/gh/m2za5/Whisper_of_Forest@main/Image.Png)
+![](https://cdn.jsdelivr.net/gh/m2za5/Whisper_of_Forest@main/Image.png)
 
 타락한 숲을 정화하고 정령들을 구해내는 3D 오픈월드 액션 어드벤처 게임입니다.
 
