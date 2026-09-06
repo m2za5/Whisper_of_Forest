@@ -1,6 +1,15 @@
 #include "CutsceneManager.h"
+#include "CutsceneFinishedProxy.h"
+
 #include "Kismet/GameplayStatics.h"
-#include "LevelSequence/Public/LevelSequenceActor.h"
+#include "GameFramework/PlayerController.h"
+#include "LevelSequence.h"
+#include "LevelSequenceActor.h"
+#include "LevelSequencePlayer.h"
+
+#include "HUDWidget.h"
+#include "PlayerCharacter.h"
+#include "UIComponent.h"
 
 UCutsceneManager::UCutsceneManager()
 {
@@ -8,144 +17,233 @@ UCutsceneManager::UCutsceneManager()
 
 void UCutsceneManager::Deinitialize()
 {
-    CutsceneStates.Empty();
+	TearDownActiveCutscene();
+	CutsceneStates.Empty();
 
-    for (auto& Pair : ActiveSequencePlayer)
-    {
-        if (Pair.Value)
-        {
-            Pair.Value->Stop();
-            Pair.Value->MarkAsGarbage();
-        }
-    }
+	SetPlayerHUDVisible(true);
 
-    ActiveSequencePlayer.Empty();
-    PlayerToCutsceneID.Empty();
+	Super::Deinitialize();
 }
 
-void UCutsceneManager::PlayCutscene(FName CutsceneID, ULevelSequence* SequenceAsset)
+bool UCutsceneManager::PlayCutscene(FName CutsceneID, ULevelSequence* SequenceAsset)
 {
-    if (!SequenceAsset)
-    {
-        return;
-    }
+	if (CutsceneID.IsNone() || !SequenceAsset)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("PlayCutscene 거부: ID 또는 시퀀스 에셋이 유효하지 않음."));
+		return false;
+	}
 
-    if (ActiveSequencePlayer.Contains(CutsceneID))
-    {
-        return;
-    }
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
 
-    // 시퀀스 플레이어 생성
-    FMovieSceneSequencePlaybackSettings PlaybackSettings;
-    PlaybackSettings.bAutoPlay = false;
+	ECutsceneState& State = CutsceneStates.FindOrAdd(CutsceneID);
 
-    ALevelSequenceActor* SequenceActor;
+	if (EnumHasAnyFlags(State, ECutsceneState::Completed))
+	{
+		UE_LOG(LogTemp, Verbose, TEXT("'%s'은(는) 이미 완료된 컷신이므로 재생하지 않음."), *CutsceneID.ToString());
+		return false;
+	}
 
-    ULevelSequencePlayer* SequencePlayer = ULevelSequencePlayer::CreateLevelSequencePlayer(
-        GetWorld(), SequenceAsset, PlaybackSettings, SequenceActor);
+	if (ActiveCutscene.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("'%s' 재생 거부: 현재 '%s' 재생 중."),
+			*CutsceneID.ToString(), *ActiveCutscene.ID.ToString());
+		return false;
+	}
 
-    if (SequencePlayer)
-    {
-        ActiveSequencePlayer.Add(CutsceneID, SequencePlayer);
-        PlayerToCutsceneID.Add(SequencePlayer, CutsceneID);
-        CutsceneStates.FindOrAdd(CutsceneID) = static_cast<uint8>(ECutsceneState::Playing);
+	FMovieSceneSequencePlaybackSettings PlaybackSettings;
+	PlaybackSettings.bAutoPlay = false;
 
-        // 시퀀스 종료 시 호출
-        SequencePlayer->OnFinished.AddDynamic(this, &UCutsceneManager::OnCutsceneEnded);
-        SequencePlayer->Play();
+	ALevelSequenceActor* SequenceActor = nullptr;
+	ULevelSequencePlayer* SequencePlayer =
+		ULevelSequencePlayer::CreateLevelSequencePlayer(World, SequenceAsset, PlaybackSettings, SequenceActor);
 
-    }
-}
+	if (!SequencePlayer)
+	{
+		if (SequenceActor)
+		{
+			SequenceActor->Destroy();
+		}
 
-void UCutsceneManager::OnCutsceneEnded()
-{
+		UE_LOG(LogTemp, Error, TEXT("'%s' LevelSequencePlayer 생성 실패."), *CutsceneID.ToString());
+		return false;
+	}
 
-    TArray<ULevelSequencePlayer*> CompletedPlayers;
+	UCutsceneFinishedProxy* Proxy = NewObject<UCutsceneFinishedProxy>(this);
+	Proxy->Init(this, CutsceneID);
 
-    for (auto& Pair : PlayerToCutsceneID)
-    {
-        ULevelSequencePlayer* SequencePlayer = Pair.Key;
-        FName CutsceneID = Pair.Value;
+	ActiveCutscene.ID = CutsceneID;
+	ActiveCutscene.Player = SequencePlayer;
+	ActiveCutscene.Actor = SequenceActor;
+	ActiveCutscene.Proxy = Proxy;
 
-        if (SequencePlayer && !SequencePlayer->IsPlaying())
-        {
-            CutsceneStates[CutsceneID] |= static_cast<uint8>(ECutsceneState::Completed);
-            OnCutsceneFinished.Broadcast(CutsceneID);
+	SequencePlayer->OnFinished.AddDynamic(Proxy, &UCutsceneFinishedProxy::OnSequenceFinished);
 
-            CompletedPlayers.Add(SequencePlayer);
-        }
-    }
+	State |= ECutsceneState::Playing;
+	State &= ~ECutsceneState::Paused;
 
-    // 종료된 플레이어 정리
-    for (ULevelSequencePlayer* SequencePlayer : CompletedPlayers)
-    {
-        SequencePlayer->Stop();
-        SequencePlayer->MarkAsGarbage();
-        FName CutsceneID = PlayerToCutsceneID[SequencePlayer];
+	SetPlayerHUDVisible(false);
+	OnCutsceneStarted.Broadcast(CutsceneID);
 
-        ActiveSequencePlayer.Remove(CutsceneID);
-        PlayerToCutsceneID.Remove(SequencePlayer);
-    }
+	UE_LOG(LogTemp, Log, TEXT("'%s' 재생 시작."), *CutsceneID.ToString());
+	SequencePlayer->Play();
+
+	return true;
 }
 
 void UCutsceneManager::SkipCutscene()
 {
-    TArray<ULevelSequencePlayer*> PlayersToStop;
+	if (!ActiveCutscene.IsValid())
+	{
+		return;
+	}
 
-    for (auto& Pair : PlayerToCutsceneID)
-    {
-        ULevelSequencePlayer* SequencePlayer = Pair.Key;
-        FName CutsceneID = Pair.Value;
+	ULevelSequencePlayer* Player = ActiveCutscene.Player;
+	if (!Player->IsPlaying() && !Player->IsPaused())
+	{
+		return;
+	}
 
-        if (SequencePlayer && SequencePlayer->IsPlaying())
-        {
-            SequencePlayer->Stop();
-            CutsceneStates[CutsceneID] |= static_cast<uint8>(ECutsceneState::Skipped);
-            OnCutsceneFinished.Broadcast(CutsceneID);
+	const FName SkippedID = ActiveCutscene.ID;
+	CutsceneStates.FindOrAdd(SkippedID) |= ECutsceneState::Skipped;
 
-            PlayersToStop.Add(SequencePlayer);
-        }
-    }
-
-    // 정리
-    for (ULevelSequencePlayer* SequencePlayer : PlayersToStop)
-    {
-        SequencePlayer->MarkAsGarbage();
-        PlayerToCutsceneID.Remove(SequencePlayer);
-    }
+	UE_LOG(LogTemp, Log, TEXT("'%s' 스킵."), *SkippedID.ToString());
+	NotifyCutsceneFinished(SkippedID);
 }
 
 void UCutsceneManager::PauseCutscene()
 {
-    for (auto& Pair : ActiveSequencePlayer)
-    {
-        if (Pair.Value && Pair.Value->IsPlaying())
-        {
-            Pair.Value->Pause();
-            CutsceneStates[Pair.Key] |= static_cast<uint8>(ECutsceneState::Paused); 
-        }
-    }
+	if (!ActiveCutscene.IsValid())
+	{
+		return;
+	}
+
+	ULevelSequencePlayer* Player = ActiveCutscene.Player;
+	if (!Player->IsPlaying())
+	{
+		return;
+	}
+
+	Player->Pause();
+	CutsceneStates.FindOrAdd(ActiveCutscene.ID) |= ECutsceneState::Paused;
 }
 
 void UCutsceneManager::ResumeCutscene()
 {
-    for (auto& Pair : ActiveSequencePlayer)
-    {
-        if (Pair.Value && Pair.Value->IsPaused())
-        {
-            Pair.Value->Play();
-            CutsceneStates[Pair.Key] |= static_cast<uint8>(ECutsceneState::Playing);
-            CutsceneStates[Pair.Key] &= ~static_cast<uint8>(ECutsceneState::Paused);
-        }
-    }
+	if (!ActiveCutscene.IsValid())
+	{
+		return;
+	}
+
+	ULevelSequencePlayer* Player = ActiveCutscene.Player;
+	if (!Player->IsPaused())
+	{
+		return;
+	}
+
+	Player->Play();
+
+	ECutsceneState& State = CutsceneStates.FindOrAdd(ActiveCutscene.ID);
+	State |= ECutsceneState::Playing;
+	State &= ~ECutsceneState::Paused;
 }
 
 bool UCutsceneManager::HasPlayedCutscene(FName CutsceneID) const
 {
-    return CutsceneStates.Contains(CutsceneID) && (CutsceneStates[CutsceneID] & static_cast<uint8>(ECutsceneState::Completed));
+	const ECutsceneState* State = CutsceneStates.Find(CutsceneID);
+	return State != nullptr && EnumHasAnyFlags(*State, ECutsceneState::Completed);
 }
 
 void UCutsceneManager::MarkCutsceneAsPlayed(FName CutsceneID)
 {
-    CutsceneStates.FindOrAdd(CutsceneID) |= static_cast<uint8>(ECutsceneState::Completed);
+	if (CutsceneID.IsNone())
+	{
+		return;
+	}
+
+	CutsceneStates.FindOrAdd(CutsceneID) |= ECutsceneState::Completed;
+}
+
+void UCutsceneManager::NotifyCutsceneFinished(FName CutsceneID)
+{
+	{
+		ECutsceneState& State = CutsceneStates.FindOrAdd(CutsceneID);
+		if (EnumHasAnyFlags(State, ECutsceneState::Completed))
+		{
+			return;
+		}
+
+		State &= ~(ECutsceneState::Playing | ECutsceneState::Paused);
+		State |= ECutsceneState::Completed;
+	}
+
+	if (ActiveCutscene.ID == CutsceneID)
+	{
+		TearDownActiveCutscene();
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("'%s' 종료."), *CutsceneID.ToString());
+	OnCutsceneFinished.Broadcast(CutsceneID);
+	if (!ActiveCutscene.IsValid())
+	{
+		SetPlayerHUDVisible(true);
+	}
+}
+
+void UCutsceneManager::TearDownActiveCutscene()
+{
+	if (ULevelSequencePlayer* Player = ActiveCutscene.Player.Get())
+	{
+		if (IsValid(Player))
+		{
+			if (UCutsceneFinishedProxy* Proxy = ActiveCutscene.Proxy.Get())
+			{
+				Player->OnFinished.RemoveDynamic(Proxy, &UCutsceneFinishedProxy::OnSequenceFinished);
+			}
+
+			Player->Stop();
+		}
+	}
+
+	if (ALevelSequenceActor* Actor = ActiveCutscene.Actor.Get())
+	{
+		if (IsValid(Actor))
+		{
+			Actor->Destroy();
+		}
+	}
+
+	ActiveCutscene.Reset();
+}
+
+void UCutsceneManager::SetPlayerHUDVisible(bool bVisible) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(World, 0);
+	if (!PlayerController)
+	{
+		return;
+	}
+
+	APlayerCharacter* PlayerCharacter = Cast<APlayerCharacter>(PlayerController->GetPawn());
+	if (!PlayerCharacter)
+	{
+		return;
+	}
+
+	UUIComponent* UIComponent = PlayerCharacter->GetUIComponent();
+	if (!UIComponent || !UIComponent->MyHUD)
+	{
+		return;
+	}
+
+	UIComponent->MyHUD->SetVisibility(bVisible ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 }
