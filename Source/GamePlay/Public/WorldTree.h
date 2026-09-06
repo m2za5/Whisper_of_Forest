@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "InteractionInterface.h"
 #include "WorldTree.generated.h"
 
 class UBoxComponent;
@@ -11,52 +12,44 @@ class UStaticMeshComponent;
 class ACharacter;
 
 UCLASS()
-class LUDENS7_TEAMPROJECT_API AWorldTree : public AActor
+class LUDENS7_TEAMPROJECT_API AWorldTree : public AActor, public IInteractionInterface
 {
 	GENERATED_BODY()
-	
-public:	
-	AWorldTree();
-
-protected:
-
-    UFUNCTION()
-    void OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
-        UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
-
-    UFUNCTION()
-    void OnOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
-        UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
-
-
-    void ReEnableOverlap();
-
 
 public:
+	AWorldTree();
+
+public:
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WorldTree")
+    FName WorldTreeID;
+
+public:
+    // Interface
+    virtual FString Interact_Implementation(AActor* Interactor) override;
+    virtual void OnFocus_Implementation(AActor* Looker) override;
+    virtual void OnUnfocus_Implementation(AActor* Looker) override;
+    virtual void GetInteractionTriggers_Implementation(TArray<UPrimitiveComponent*>& OutTriggers) override;
+    virtual FText GetInteractText_Implementation() override;
+
     UFUNCTION(BlueprintCallable, Category = "WorldTree")
     void TeleportHereFromAnywhere(ACharacter* Player);
 
     UFUNCTION(BlueprintCallable, Category = "WorldTree")
-    void Unlock() { bUnlocked = true; }
+    void Unlock();
 
     UFUNCTION(BlueprintPure, Category = "WorldTree")
     bool IsUnlocked() const { return bUnlocked; }
 
-private:
-    void SetOverlapEnabled(bool bEnabled);
+    UFUNCTION(BlueprintPure, Category = "WorldTree")
+    FName GetWorldTreeID() const { return WorldTreeID; }
 
+private:
     UPROPERTY(VisibleAnywhere)
     UBoxComponent* TriggerBox;
 
     UPROPERTY(VisibleAnywhere)
     UStaticMeshComponent* Mesh;
 
-
-    UPROPERTY(EditAnywhere, Category = "Teleport|Safety")
-    float OverlapCooldown = 0.25f;
-
     UPROPERTY(EditAnywhere, Category = "WorldTree")
     bool bUnlocked = false;
-
-    FTimerHandle ReEnableOverlapHandle;
 };
