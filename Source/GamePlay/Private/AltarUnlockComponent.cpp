@@ -32,4 +32,15 @@ void UAltarUnlockComponent::OnCutsceneFinished(FName FinishedID)
 	}
 }
 
+void UAltarUnlockComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UWorld* World = GetWorld())
+	{
+		if (UCutsceneManager* Manager = World->GetSubsystem<UCutsceneManager>())
+		{
+			Manager->OnCutsceneFinished.RemoveDynamic(this, &UAltarUnlockComponent::OnCutsceneFinished);
+		}
+	}
+	Super::EndPlay(EndPlayReason);
+}
 
