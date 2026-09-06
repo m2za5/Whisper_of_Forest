@@ -43,3 +43,4 @@ private:
 	float CurrentEnergy;
 	bool bIsActivated;
 };
+ 
