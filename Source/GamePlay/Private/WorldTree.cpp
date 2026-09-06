@@ -3,8 +3,8 @@
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
-#include "TimerManager.h"
 #include "PlayerCharacter.h"
+#include "WorldTreeManager.h"
 
 AWorldTree::AWorldTree()
 {
@@ -13,60 +13,74 @@ AWorldTree::AWorldTree()
     TriggerBox = CreateDefaultSubobject<UBoxComponent>(TEXT("TriggerBox"));
     RootComponent = TriggerBox;
     TriggerBox->SetBoxExtent(FVector(100.f));
-    TriggerBox->SetCollisionProfileName(TEXT("Trigger"));
-    TriggerBox->OnComponentBeginOverlap.AddDynamic(this, &AWorldTree::OnOverlapBegin);
-    TriggerBox->OnComponentEndOverlap.AddDynamic(this, &AWorldTree::OnOverlapEnd);
+    TriggerBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    TriggerBox->SetCollisionResponseToAllChannels(ECR_Ignore);
+    TriggerBox->SetCollisionResponseToChannel(InteractionTraceChannel, ECR_Block);
 
     Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Visual"));
     Mesh->SetupAttachment(RootComponent);
 }
 
 
-void AWorldTree::SetOverlapEnabled(bool bEnabled)
-{
-    if (!TriggerBox) return;
-    TriggerBox->SetGenerateOverlapEvents(bEnabled);
-}
-
-void AWorldTree::OnOverlapBegin(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
-    UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
-{
-    if (APlayerCharacter* PC = Cast<APlayerCharacter>(OtherActor))
-    {
-        PC->FocusedTree = this;
-    }
-
-}
-
-void AWorldTree::OnOverlapEnd(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
-    UPrimitiveComponent* OtherComp, int32 OtherBodyIndex)
-{
-    if (APlayerCharacter* PC = Cast<APlayerCharacter>(OtherActor))
-    {
-        if (PC->FocusedTree == this)
-        {
-            PC->FocusedTree = nullptr;
-        }
-    }
-}
-
-void AWorldTree::ReEnableOverlap()
-{
-    SetOverlapEnabled(true);
-}
-
 void AWorldTree::TeleportHereFromAnywhere(ACharacter* Player)
 {
     if (!Player) return;
+
+    UE_LOG(LogTemp, Warning, TEXT("WorldTree : Yes"));
+
     if (!bUnlocked) return;
 
     const FVector TargetLocation = GetActorLocation() + FVector(0.f, 0.f, 50.f);
     const FRotator TargetRotation = GetActorRotation();
 
-    SetOverlapEnabled(false);
-
     Player->TeleportTo(TargetLocation, TargetRotation, false, true);
+}
 
-    GetWorldTimerManager().SetTimer(
-        ReEnableOverlapHandle, this, &AWorldTree::ReEnableOverlap, OverlapCooldown, false);
+void AWorldTree::Unlock()
+{
+    if (bUnlocked) return;
+
+    UWorldTreeManager* WTM = GetWorld()->GetSubsystem<UWorldTreeManager>();
+    if (!WTM || !WTM->TryUnlockTree(this))
+    {
+        return;
+    }
+
+    bUnlocked = true;
+
+    if (TriggerBox)
+    {
+        TriggerBox->SetCollisionResponseToChannel(InteractionTraceChannel, ECR_Ignore);
+    }
+}
+
+FString AWorldTree::Interact_Implementation(AActor* Interactor)
+{
+    Unlock();
+    return TEXT("");
+}
+
+void AWorldTree::OnFocus_Implementation(AActor* Looker)
+{
+}
+
+void AWorldTree::OnUnfocus_Implementation(AActor* Looker)
+{
+}
+
+void AWorldTree::GetInteractionTriggers_Implementation(TArray<UPrimitiveComponent*>& OutTriggers)
+{
+    if (TriggerBox)
+    {
+        OutTriggers.Add(TriggerBox);
+    }
+}
+
+FText AWorldTree::GetInteractText_Implementation()
+{
+    if (!bUnlocked)
+    {
+        return FText::FromString(TEXT("세계수 등록"));
+    }
+    return FText::GetEmpty();
 }
