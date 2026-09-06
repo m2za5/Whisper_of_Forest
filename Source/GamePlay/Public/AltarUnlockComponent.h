@@ -21,12 +21,13 @@ public:
 
 	void PlayUnlockCutscene();
 
+	UPROPERTY(BlueprintAssignable, Category = "Cutscene")
 	FOnUnlockCutsceneEnded OnUnlockCutsceneEnded;
 
 protected:
 	UFUNCTION()
 	void OnCutsceneFinished(FName FinishedID);
-
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	UPROPERTY(EditAnywhere, Category = "Cutscene")
