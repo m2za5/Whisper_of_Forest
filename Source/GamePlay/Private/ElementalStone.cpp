@@ -4,6 +4,11 @@
 #include "ElementalStone.h"
 #include "ElementalAltar.h"
 
+namespace
+{
+	constexpr float DefaultStoneMaxEnergy = 10.0f;
+}
+
 UElementalStone::UElementalStone()
 {
 	MaxEnergy = 10.0f;
@@ -14,7 +19,21 @@ UElementalStone::UElementalStone()
 void UElementalStone::Initialize(EElementalType InType, float InMaxEnergy)
 {
 	ElementalType = InType;
-	MaxEnergy = InMaxEnergy;
+	if (InMaxEnergy <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("[ElementalStone] Invalid MaxEnergy(%f). Fallback to %f."),
+			InMaxEnergy, DefaultStoneMaxEnergy);
+
+		MaxEnergy = DefaultStoneMaxEnergy;
+	}
+	else
+	{
+		MaxEnergy = InMaxEnergy;
+	}
+
+	CurrentEnergy = 0.0f;
+	bIsActivated = false;
 }
 
 void UElementalStone::AddEnergy(float Amount)
@@ -33,7 +52,7 @@ void UElementalStone::AddEnergy(float Amount)
 
 float UElementalStone::GetProgress() const
 {
-	return CurrentEnergy / MaxEnergy;
+	return MaxEnergy > KINDA_SMALL_NUMBER ? (CurrentEnergy / MaxEnergy) : 0.0f;
 }
 
 void UElementalStone::Activate()
